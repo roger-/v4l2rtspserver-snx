@@ -67,7 +67,9 @@ else()
     if (NOT EXISTS ${LIVE})
         file (DOWNLOAD ${LIVE555URL} ${CMAKE_CURRENT_SOURCE_DIR}/live555-latest.tar.gz )
         message(STATUS "extract live555")
-        EXECUTE_PROCESS(COMMAND ${CMAKE_COMMAND} -E tar xf ${CMAKE_CURRENT_SOURCE_DIR}/live555-latest.tar.gz  RESULT_VARIABLE unpack_result)
+        EXECUTE_PROCESS(COMMAND ${CMAKE_COMMAND} -E tar xf ${CMAKE_CURRENT_SOURCE_DIR}/live555-latest.tar.gz
+                        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                        RESULT_VARIABLE unpack_result)
         if(NOT unpack_result STREQUAL "0")
             message(FATAL_ERROR "Fetching and compiling live555 failed!")
         endif()
@@ -80,9 +82,13 @@ endif()
 
 # librtsp
 aux_source_directory(src LIBV4L2RTSP_SRC_FILES)
-add_library (libv4l2rtspserver STATIC ${LIVESOURCE} ${LIBV4L2RTSP_SRC_FILES})	
+add_library (libv4l2rtspserver STATIC ${LIVESOURCE} ${LIBV4L2RTSP_SRC_FILES})
 target_include_directories(libv4l2rtspserver PUBLIC inc ${LIVEINCLUDE})
 target_compile_definitions(libv4l2rtspserver PUBLIC ${LIVE555CFLAGS})
+
+# Sonix SNX98600 SDK support (optional, adds SNX-specific sources and libs)
+include(snx/snx98600.cmake OPTIONAL)
+
 target_link_libraries (${PROJECT_NAME} libv4l2rtspserver ${LIVE_LIBRARIES}) 
 set (LIBRARIES "")
 if (OpenSSL_FOUND)

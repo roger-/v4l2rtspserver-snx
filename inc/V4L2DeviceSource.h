@@ -16,6 +16,7 @@
 #include <iostream>
 #include <iomanip>
 #include <mutex>
+#include <atomic>
 #include <thread>
 
 // live555
@@ -75,7 +76,11 @@ public:
 
 public:
 	static V4L2DeviceSource *createNew(UsageEnvironment &env, DeviceInterface *device, int outputFd, unsigned int queueSize, CaptureMode captureMode);
-	std::string getAuxLine() { return m_auxLine; }
+	// Thread-safe read of auxiliary SDP line (e.g., H264 SPS/PPS derived string)
+	std::string getAuxLine() {
+		std::lock_guard<std::mutex> lock(m_auxMutex);
+		return m_auxLine;
+	}
 	std::string getLastFrame()
 	{
 		std::lock_guard<std::mutex> lock(m_lastFrameMutex);
@@ -86,6 +91,8 @@ public:
 	void postFrame(char *frame, int frameSize, const timeval &ref);
 	virtual std::list<std::string> getInitFrames() { return std::list<std::string>(); }
 	virtual bool isKeyFrame(const char *, int) { return false; }
+	// Ask the capture thread (if any) to stop; used on shutdown to exit promptly
+	void requestStop() { m_stop.store(true); }
 
 protected:
 	V4L2DeviceSource(UsageEnvironment &env, DeviceInterface *device, int outputFd, unsigned int queueSize, CaptureMode captureMode);
@@ -95,7 +102,7 @@ protected:
 	virtual void *thread();
 	static void deliverFrameStub(void *clientData) { ((V4L2DeviceSource *)clientData)->deliverFrame(); };
 	void deliverFrame();
-	static void incomingPacketHandlerStub(void *clientData, int mask) { ((V4L2DeviceSource *)clientData)->incomingPacketHandler(); };
+	static void incomingPacketHandlerStub(void *clientData, int /*mask*/) { ((V4L2DeviceSource *)clientData)->incomingPacketHandler(); };
 	void incomingPacketHandler();
 	int getNextFrame();
 	void processFrame(char *frame, int frameSize, const timeval &ref);
@@ -117,7 +124,13 @@ protected:
 	unsigned int m_queueSize;
 	std::thread m_thread;
 	std::mutex m_mutex;
+	// Aux SDP data (e.g., H264 sprop-parameter-sets). Guarded by m_auxMutex.
 	std::string m_auxLine;
+	std::mutex m_auxMutex;
 	std::mutex m_lastFrameMutex;
 	std::string m_lastFrame;
+	std::atomic<bool> m_stop;
+	// For proper frame rate timing with presentation timestamps
+	timeval m_lastPresentationTime;
+	bool m_firstFrame;
 };

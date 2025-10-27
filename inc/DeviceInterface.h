@@ -19,6 +19,8 @@ public:
 	virtual size_t read(char *buffer, size_t bufferSize) = 0;
 	virtual int getFd() = 0;
 	virtual unsigned long getBufferSize() = 0;
+	// Optional hint to request a keyframe/IDR from the underlying encoder; default no-op
+	virtual bool requestKeyFrame() { return false; }
 	virtual int getWidth() { return -1; }
 	virtual int getHeight() { return -1; }
 	virtual int getVideoFormat() { return -1; }

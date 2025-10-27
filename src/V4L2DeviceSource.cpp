@@ -54,8 +54,12 @@ V4L2DeviceSource::V4L2DeviceSource(UsageEnvironment &env, DeviceInterface *devic
 	  m_out("out"),
 	  m_outfd(outputFd),
 	  m_device(device),
-	  m_queueSize(queueSize)
+	  m_queueSize(queueSize),
+	  m_firstFrame(true)
 {
+	m_stop.store(false);
+	m_lastPresentationTime.tv_sec = 0;
+	m_lastPresentationTime.tv_usec = 0;
 	m_eventTriggerId = envir().taskScheduler().createEventTrigger(V4L2DeviceSource::deliverFrameStub);
 	if (m_device)
 	{
@@ -65,7 +69,18 @@ V4L2DeviceSource::V4L2DeviceSource(UsageEnvironment &env, DeviceInterface *devic
 			m_thread = std::thread(&V4L2DeviceSource::thread, this);
 			break;
 		case CAPTURE_LIVE555_THREAD:
-			envir().taskScheduler().turnOnBackgroundReadHandling(m_device->getFd(), V4L2DeviceSource::incomingPacketHandlerStub, this);
+		{
+			int fd = m_device->getFd();
+			if (fd >= 0)
+			{
+				envir().taskScheduler().turnOnBackgroundReadHandling(fd, V4L2DeviceSource::incomingPacketHandlerStub, this);
+			}
+			else
+			{
+				LOG(WARN) << "CAPTURE_LIVE555_THREAD requested but device fd is invalid (<0)";
+			}
+			break;
+		}
 			break;
 		case NOCAPTURE:
 		default:
@@ -78,6 +93,13 @@ V4L2DeviceSource::V4L2DeviceSource(UsageEnvironment &env, DeviceInterface *devic
 V4L2DeviceSource::~V4L2DeviceSource()
 {
 	envir().taskScheduler().deleteEventTrigger(m_eventTriggerId);
+	// Signal thread to stop and turn off background read handling if enabled
+	m_stop.store(true);
+	int fd = m_device ? m_device->getFd() : -1;
+	if (fd >= 0)
+	{
+		envir().taskScheduler().turnOffBackgroundReadHandling(fd);
+	}
 	if (m_thread.joinable())
 	{
 		m_thread.join();
@@ -94,9 +116,12 @@ void *V4L2DeviceSource::thread()
 	timeval tv;
 
 	LOG(NOTICE) << "begin thread";
-	while (!stop)
+	while (!stop && !m_stop.load())
 	{
-		int fd = m_device->getFd();
+		int fd = m_device ? m_device->getFd() : -1;
+		if (fd >= 0)
+		{
+			FD_ZERO(&fdset);
 		FD_SET(fd, &fdset);
 		tv.tv_sec = 1;
 		tv.tv_usec = 0;
@@ -110,11 +135,23 @@ void *V4L2DeviceSource::thread()
 				{
 					LOG(DEBUG) << "Retrying getNextFrame";
 				}
-				else
+					else if (!m_stop.load())
 				{
 					LOG(ERROR) << "error:" << strerror(errno);
 					stop = 1;
 				}
+				}
+			}
+		}
+		else
+		{
+			// No valid fd: poll by calling getNextFrame then sleep briefly to avoid busy loop
+			int r = this->getNextFrame();
+			if (r <= 0)
+			{
+				tv.tv_sec = 0;
+				tv.tv_usec = 10000; // 10ms
+				select(0, NULL, NULL, NULL, &tv);
 			}
 		}
 	}
@@ -163,7 +200,30 @@ void V4L2DeviceSource::deliverFrame()
 
 			LOG(DEBUG) << "deliverFrame\ttimestamp:" << curTime.tv_sec << "." << curTime.tv_usec << "\tsize:" << fFrameSize << "\tdiff:" << (diff.tv_sec * 1000 + diff.tv_usec / 1000) << "ms\tqueue:" << m_captureQueue.size();
 
-			fPresentationTime = frame->m_timestamp;
+			// CRITICAL: Must use frame intervals from codec, not wall-clock delivery time!
+			// The codec produces frames at codec_fps (e.g., 5fps), but we might deliver faster.
+			// Using curTime would send 15fps worth of timestamps for 5fps content -> VLC sees frames "late"
+			if (m_firstFrame)
+			{
+				// First frame: use current time as baseline
+				gettimeofday(&fPresentationTime, NULL);
+				m_firstFrame = false;
+			}
+			else
+			{
+				// Subsequent frames: increment by ACTUAL frame interval (preserves codec frame rate)
+				timeval frameInterval;
+				timersub(&frame->m_timestamp, &m_lastPresentationTime, &frameInterval);
+				
+				// Add interval to last presentation time
+				unsigned long uSeconds = fPresentationTime.tv_usec + frameInterval.tv_usec;
+				fPresentationTime.tv_sec += frameInterval.tv_sec + (uSeconds / 1000000);
+				fPresentationTime.tv_usec = uSeconds % 1000000;
+			}
+			
+			// Remember this frame's capture timestamp for next interval calculation
+			m_lastPresentationTime = frame->m_timestamp;
+			
 			memcpy(fTo, frame->m_buffer, fFrameSize);
 			delete frame;
 
@@ -194,18 +254,31 @@ void V4L2DeviceSource::incomingPacketHandler()
 // read from device
 int V4L2DeviceSource::getNextFrame()
 {
-	timeval ref;
-	gettimeofday(&ref, NULL);
+	if (m_stop.load()) {
+		// During shutdown, quietly indicate no frame without spamming logs
+		return 0;
+	}
 	char *buffer = new char[m_device->getBufferSize()];
 	int frameSize = m_device->read(buffer, m_device->getBufferSize());
+	
+	// Take timestamp AFTER read() completes, not before
+	// SNX driver blocks in read() for rate limiting, so timestamp before read
+	// would be 500ms+ in the past by the time frame is ready to deliver
+	timeval ref;
+	gettimeofday(&ref, NULL);
+	
 	if (frameSize < 0)
 	{
+		if (!m_stop.load()) {
 		LOG(NOTICE) << "V4L2DeviceSource::getNextFrame errno:" << errno << " " << strerror(errno);
+		}
 		delete[] buffer;
 	}
 	else if (frameSize == 0)
 	{
+		if (!m_stop.load()) {
 		LOG(DEBUG) << "V4L2DeviceSource::getNextFrame no data errno:" << errno << " " << strerror(errno);
+		}
 		delete[] buffer;
 	}
 	else

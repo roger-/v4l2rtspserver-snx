@@ -13,6 +13,7 @@
 
 #include <sstream>
 
+#include "snx/compat.h"
 #include "logger.h"
 #include "V4l2Capture.h"
 #include "V4l2Output.h"
@@ -131,7 +132,7 @@ std::string V4l2RTSPServer::getV4l2Alsa(const std::string &v4l2device)
 				std::string ueventPath(video4linuxPath);
 				ueventPath.append("/").append(entry->d_name).append("/device/uevent");
 				std::ifstream ifsd(ueventPath.c_str());
-				deviceid = std::string(std::istreambuf_iterator<char>{ifsd}, {});
+				deviceid = compat::read_stream_to_string(ifsd);
 				deviceid.erase(deviceid.find_last_not_of("\n") + 1);
 			}
 
@@ -157,7 +158,7 @@ std::string V4l2RTSPServer::getV4l2Alsa(const std::string &v4l2device)
 				os << "/sys/class/sound/card" << rcard << "/device/uevent";
 
 				std::ifstream ifs(os.str().c_str());
-				std::string deviceid = std::string(std::istreambuf_iterator<char>{ifs}, {});
+				std::string deviceid = compat::read_stream_to_string(ifs);
 				deviceid.erase(deviceid.find_last_not_of("\n") + 1);
 				deviceid = getDeviceId(deviceid);
 

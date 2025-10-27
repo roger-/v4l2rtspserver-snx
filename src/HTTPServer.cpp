@@ -14,6 +14,7 @@
 #include <sstream>
 #include <fstream>
 #include <algorithm>
+#include <iterator>
 
 #include <time.h>
 #include "ByteStreamMemoryBufferSource.hh"
@@ -333,11 +334,11 @@ void HTTPServer::HTTPClientConnection::handleHTTPCmd_StreamingGET(char const *ur
 
 			std::list<std::string> formats = getSubsessionFormats(serverSession);
 			os << "{\"" << serverSession->streamName() << "\": [";
-			for (auto &format : formats) {
-				if (format != *formats.begin()) {
+			for (std::list<std::string>::const_iterator itFmt = formats.begin(); itFmt != formats.end(); ++itFmt) {
+				if (itFmt != formats.begin()) {
 					os << ",";
 				}
-				os << "\"" << format << "\"";
+				os << "\"" << *itFmt << "\"";
 			}
 			os << "]}\n";
 		}

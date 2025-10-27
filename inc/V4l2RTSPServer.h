@@ -13,6 +13,8 @@
 
 #include <list>
 
+#include "snx/compat.h"
+
 // live555
 #include <BasicUsageEnvironment.hh>
 #include <GroupsockHelper.hh>
@@ -199,7 +201,7 @@ public:
         {
             rtcpPortNum = atoi(port.c_str());
         }
-        return inet_ntoa(destinationAddress) + std::string(":") + std::to_string(rtpPortNum) + std::string(":") + std::to_string(rtcpPortNum);
+        return inet_ntoa(destinationAddress) + std::string(":") + compat::to_string(rtpPortNum) + std::string(":") + compat::to_string(rtcpPortNum);
     }
 
     ServerMediaSession *AddMulticastSession(const std::string &url, const std::string &inmulticasturi, std::string &outmulticasturi, StreamReplicator *videoReplicator, StreamReplicator *audioReplicator)

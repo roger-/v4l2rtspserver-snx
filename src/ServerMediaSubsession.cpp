@@ -8,6 +8,7 @@
 ** -------------------------------------------------------------------------*/
 
 #include <sstream>
+#include <iomanip>
 #include <linux/videodev2.h>
 
 // project
@@ -124,6 +125,16 @@ RTPSink *BaseServerMediaSubsession::createSink(UsageEnvironment &env, Groupsock 
 	else if (format.find("audio/MPEG") == 0)
 	{
 		videoSink = MPEG1or2AudioRTPSink::createNew(env, rtpGroupsock);
+	}
+	else if (format.find("audio/PCMA") == 0)
+	{
+		// G.711 A-law: static payload type 8, 8000 Hz, 1 channel
+		videoSink = SimpleRTPSink::createNew(env, rtpGroupsock, 8, 8000, "audio", "PCMA", 1, True, False);
+	}
+	else if (format.find("audio/PCMU") == 0)
+	{
+		// G.711 μ-law: static payload type 0, 8000 Hz, 1 channel
+		videoSink = SimpleRTPSink::createNew(env, rtpGroupsock, 0, 8000, "audio", "PCMU", 1, True, False);
 	}
 	return videoSink;
 }
