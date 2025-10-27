@@ -1,3 +1,26 @@
+v4l2rtspserver for SONiX SN98600
+====================
+
+This is a minimally modified version of [v4l2rtspserver](https://github.com/mpromonet/v4l2rtspserver) for the XiaoFang WiFi Camera (with SONiX SN98600 SoC). Unlike the outdated one in Fang Hacks, this is based on the latest v4l2rtspserver/Live555, so it should be more stable. It also supports dual streams (e.g. low/high resolution), audio, authentication, etc. HTTP/HLS may work, it hasn't been tested.
+
+To use, first install [Fang Hacks](https://github.com/samtap/fang-hacks) on your device (I use [this fork](https://github.com/davidjb/fang-hacks)) to get SSH access and copy the pre-compiled `v4l2rtspserver` binary to your device. I recommend disabling cloud access (probably doesn't work now anyway) and modifying the startup scripts.
+
+# Building
+
+If you want to build from scratch, install a Dockerized SDK and do this:
+
+```bash
+cd v4l2rtspserver-snx
+mkdir -p build-snx
+cd build-snx
+SNX_SDK_ROOT=/opt/sonix/sonix9600/snx_sdk cmake -DCMAKE_TOOLCHAIN_FILE=../snx/snx98600-toolchain.cmake -DSTATIC_BUILD=ON ..
+make
+```
+
+Note that the SN98600 is very old and doesn't support modern C++, so several hacks were needed to make it compile. AI was used to help with the port and fix some bugs.
+
+---
+
 [![CircleCI](https://circleci.com/gh/mpromonet/v4l2rtspserver.svg?style=shield)](https://circleci.com/gh/mpromonet/v4l2rtspserver)
 [![CirusCI](https://api.cirrus-ci.com/github/mpromonet/v4l2rtspserver.svg?branch=master)](https://cirrus-ci.com/github/mpromonet/v4l2rtspserver)
 [![Snap Status](https://snapcraft.io//v4l2-rtspserver/badge.svg)](https://snapcraft.io/v4l2-rtspserver)
