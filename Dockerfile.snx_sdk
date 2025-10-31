@@ -1,0 +1,68 @@
+# Minimal Debian Trixie base
+FROM debian:trixie-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ---------------------------------------------------------------------
+# Install packages and 32-bit libs required by the old SNX toolchain
+# ---------------------------------------------------------------------
+RUN dpkg --add-architecture i386 \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      bash gcc make patch sudo \
+      libencode-detect-perl libdigest-crc-perl \
+      libncurses-dev \
+      libc6:i386 libstdc++6:i386 zlib1g-dev:i386 \
+      cpio lzma lzop xz-utils \
+      ca-certificates less curl file git cmake \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+# Ensure /bin/sh -> bash (many SDK scripts assume bash)
+RUN ln -sf /bin/bash /bin/sh
+
+# ---------------------------------------------------------------------
+# Copy & unpack SDK
+# Put your extracted SDK dir (contains sdk.unpack) next to this Dockerfile.
+# Override SDK_SRC_DIR at build time if needed: --build-arg SDK_SRC_DIR=sonix9600
+# ---------------------------------------------------------------------
+WORKDIR /opt/sonix
+ARG SDK_SRC_DIR=sonix9600
+COPY ${SDK_SRC_DIR}/ /opt/sonix/${SDK_SRC_DIR}/
+
+RUN set -eux \
+ && cd /opt/sonix/${SDK_SRC_DIR} \
+ && bash ./sdk.unpack \
+ && if [ -f snx_sdk/kernel/linux-2.6.35.12/src/kernel/timeconst.pl ]; then \
+      sed -i 's/defined(@val)/@val/' snx_sdk/kernel/linux-2.6.35.12/src/kernel/timeconst.pl; \
+    fi
+
+# ---------------------------------------------------------------------
+# Make SDK & workspace writable for any runtime user (works with userns=keep-id)
+# ---------------------------------------------------------------------
+RUN mkdir -p /work \
+ && chmod -R a+rwX /opt/sonix /work \
+ && echo 'umask 0002' > /etc/profile.d/00-umask.sh
+
+# ---------------------------------------------------------------------
+# Persistent SDK environment for all login shells
+# (use a quoted heredoc so $PATH isn't expanded at build time)
+# ---------------------------------------------------------------------
+RUN cat > /etc/profile.d/99-snx-sdk.sh <<'EOF'
+# SNX SDK environment
+export SNX_SDK_ROOT="/opt/sonix/${SDK_SRC_DIR}/snx_sdk"
+export CROSS_COMPILE="arm-linux-"
+export PATH="$PATH:/opt/sonix/${SDK_SRC_DIR}/snx_sdk/toolchain/crosstool-4.5.2/bin"
+export LD_LIBRARY_PATH="/opt/sonix/${SDK_SRC_DIR}/snx_sdk/middleware/video/middleware/lib:${LD_LIBRARY_PATH}"
+EOF
+RUN chmod 0644 /etc/profile.d/99-snx-sdk.sh
+
+RUN useradd -u 1000 -o -m sonixuser
+USER sonixuser
+
+# ---------------------------------------------------------------------
+# Default workdir and shell (ril3y-style interactive bash login)
+# ---------------------------------------------------------------------
+WORKDIR /work
+ENTRYPOINT ["/bin/bash"]
+CMD ["-l"]
