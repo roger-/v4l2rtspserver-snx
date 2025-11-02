@@ -3,7 +3,25 @@ v4l2rtspserver for SONiX SN98600
 
 This is a minimally modified version of [v4l2rtspserver](https://github.com/mpromonet/v4l2rtspserver) for the XiaoFang WiFi Camera (with SONiX SN98600 SoC). Unlike the outdated one in Fang Hacks, this is based on the latest v4l2rtspserver/Live555, so it should be more stable. It also supports dual streams (e.g. low/high resolution), audio, authentication, etc. HTTP/HLS may work, it hasn't been tested.
 
-To use, first install [Fang Hacks](https://github.com/samtap/fang-hacks) on your device (I use [this fork](https://github.com/davidjb/fang-hacks)) to get SSH access and copy the pre-compiled `v4l2rtspserver` binary to your device. I recommend disabling cloud access (probably doesn't work now anyway) and modifying the startup scripts.
+# Installation
+
+To use, first install [Fang Hacks](https://github.com/samtap/fang-hacks) on your device (I use [this fork](https://github.com/davidjb/fang-hacks)) to get SSH access. Then I recommend disabling cloud access (probably doesn't work now anyway).
+
+The following will copy the binary and startup script to your SD card (replace IP_ADDRESS):
+
+```bash
+CAM_IP="IP_ADDRESS" && \
+BASE_URL="https://raw.githubusercontent.com/roger-/v4l2rtspserver-snx/master/fang-hacks" && \
+wget -O /tmp/v4l2rtspserver "$BASE_URL/v4l2rtspserver" && \
+wget -O /tmp/19-v4l2rtspserver "$BASE_URL/19-v4l2rtspserver" && \
+sshpass -p "ismart12" scp -o StrictHostKeyChecking=no /tmp/v4l2rtspserver root@$CAM_IP:/media/mmcblk0p2/data/usr/bin/ && \
+sshpass -p "ismart12" scp -o StrictHostKeyChecking=no /tmp/19-v4l2rtspserver root@$CAM_IP:/media/mmcblk0p2/data/etc/scripts/ && \
+sshpass -p "ismart12" ssh -o StrictHostKeyChecking=no root@$CAM_IP 'chmod +x /media/mmcblk0p2/data/usr/bin/v4l2rtspserver'
+```
+
+(GitHub is HTTPS only so this has to be run on another machine on your LAN)
+
+Then go to `http://IP_ADDRESS/cgi-bin/scripts` and stop + disable `20-rtsp-server` and enable + start `19-v4l2rtspserver`. Streams will be on `rtsp://IP_ADDRESS:8554/low` and `/high`.
 
 # Building
 
