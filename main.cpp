@@ -172,8 +172,8 @@ int main(int argc, char **argv)
 
 	snxOptions.hi.width = 1920;
 	snxOptions.hi.height = 1080;
-	snxOptions.hi.fps = 10;
-	snxOptions.hi.bitrate = 1024 * 1024;
+	snxOptions.hi.fps = 20;
+	snxOptions.hi.bitrate = 1 * 1024 * 1024;
 	snxOptions.hi.gop = 20;
 	snxOptions.hi.scale = 1;
 
@@ -184,6 +184,8 @@ int main(int argc, char **argv)
 
 	snxOptions.devices.ispDevice = "/dev/video0";
 	snxOptions.devices.m2mDevice = "/dev/video1";
+	snxOptions.devices.powerLineFreq = 60;  // Default to 60Hz (US)
+	
 	const char *defaultPort = getenv("PORT");
 	if (defaultPort != NULL)
 	{
@@ -203,6 +205,7 @@ int main(int argc, char **argv)
 		OPT_SNX_ISP_DEV,
 		OPT_SNX_M2M_DEV,
 		OPT_SNX_SINGLE,
+		OPT_SNX_POWER_FREQ,
 		OPT_AUDIO_DEVICE,
 		OPT_AUDIO_RTP,
 		OPT_SNX_NO_AUDIO
@@ -220,6 +223,7 @@ int main(int argc, char **argv)
 		{"snx-isp-dev", required_argument, NULL, OPT_SNX_ISP_DEV},
 		{"snx-m2m-dev", required_argument, NULL, OPT_SNX_M2M_DEV},
 		{"snx-single", no_argument, NULL, OPT_SNX_SINGLE},
+		{"snx-power-freq", required_argument, NULL, OPT_SNX_POWER_FREQ},
 		{"snx-no-audio", no_argument, NULL, OPT_SNX_NO_AUDIO},
 		{"audio-dev", required_argument, NULL, OPT_AUDIO_DEVICE},
 		{"audio-rtp", required_argument, NULL, OPT_AUDIO_RTP},
@@ -281,6 +285,20 @@ int main(int argc, char **argv)
 		case OPT_SNX_SINGLE:
 			snxOptions.single = true;
 			break;
+		case OPT_SNX_POWER_FREQ:
+		{
+			int freq = atoi(optarg);
+			if (freq == 50 || freq == 60)
+				snxOptions.devices.powerLineFreq = freq;
+			else if (freq == 0)
+				snxOptions.devices.powerLineFreq = 0;  // Disable anti-flicker
+			else
+			{
+				LOG(ERROR) << "Invalid --snx-power-freq value (must be 0, 50, or 60): " << optarg;
+				exit(1);
+			}
+			break;
+		}
 		case OPT_AUDIO_DEVICE:
 			snxOptions.audioDevice = optarg;
 			break;
@@ -477,6 +495,7 @@ int main(int argc, char **argv)
 			std::cout << "\t --snx-isp-dev PATH    : ISP device (default: /dev/video0)" << std::endl;
 			std::cout << "\t --snx-m2m-dev PATH    : Codec M2M device (default: /dev/video1)" << std::endl;
 			std::cout << "\t --snx-single          : start only high (M2M) stream, disable low/CAP" << std::endl;
+			std::cout << "\t --snx-power-freq N    : power line frequency for anti-flicker: 0=off, 50, 60 (default: 60)" << std::endl;
 			std::cout << "\t --snx-no-audio        : disable audio in SNX mode" << std::endl;
 			std::cout << "\t --audio-dev NAME      : ALSA device name (default: hw:0,0)" << std::endl;
 			std::cout << "\t --audio-rtp pcma|pcmu : audio RTP payload, G.711 A-law or mu-law (default: pcma)" << std::endl;
@@ -631,6 +650,21 @@ int main(int argc, char **argv)
 	// init logger
 	initLogger(verbose);
 	LOG(NOTICE) << "Version: " << VERSION << " live555 version:" << LIVEMEDIA_LIBRARY_VERSION_STRING;
+
+#ifdef HAVE_SNX_SDK
+	// Suppress SDK's verbose stdout/stderr (RC dumps, /proc errors) in SNX mode
+	if (snxOptions.enabled)
+	{
+		// Redirect stderr to /dev/null to suppress SDK noise
+		// Our logging goes through LOG() which uses a different stream
+		int null_fd = open("/dev/null", O_WRONLY);
+		if (null_fd >= 0)
+		{
+			dup2(null_fd, STDERR_FILENO);
+			close(null_fd);
+		}
+	}
+#endif
 
 	// create RTSP server
 	V4l2RTSPServer rtspServer(rtspPort, rtspOverHTTPPort, timeout, hlsSegment, userPasswordList, realm, webroot, sslKeyCert, enableRTSPS);

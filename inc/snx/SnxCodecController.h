@@ -25,7 +25,8 @@ public:
         std::string ispDevice;
         std::string m2mDevice;
         std::string capDevice;
-        DeviceConfig() {}
+        int powerLineFreq;  // 0=disabled, 50, 60
+        DeviceConfig() : powerLineFreq(60) {}
     };
 
     SnxCodecController();

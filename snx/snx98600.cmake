@@ -106,7 +106,9 @@ target_include_directories(libv4l2rtspserver PUBLIC
 )
 
 # Locate and link SNX SDK libraries
-set(SNX_LIBS snx_vc snx_isp snx_common snx_rc)
+# IMPORTANT: Library order matters for static linking!
+# snx_rc depends on snx_isp, so snx_rc must come BEFORE snx_isp
+set(SNX_LIBS snx_vc snx_rc snx_isp snx_common)
 foreach(LIB ${SNX_LIBS})
     configure_snx_library(libv4l2rtspserver ${LIB})
 endforeach()

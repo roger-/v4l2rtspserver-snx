@@ -15,6 +15,8 @@
 #ifdef HAVE_SNX_SDK
 #include <linux/videodev2.h>
 #include <snx_vc/snx_vc_lib.h>
+#include <snx_rc/snx_rc_lib.h>
+#include <snx_isp/isp_lib_api.h>
 #endif
 
 namespace
@@ -91,6 +93,7 @@ struct SnxCodecController::Impl
     struct Session
     {
         snx_m2m ctx;
+        snx_rc rc;      // Rate control state for CBR
         bool isM2M;
         bool active;
         bool codecInitialized;
@@ -106,6 +109,7 @@ struct SnxCodecController::Impl
             , ispStarted(false)
         {
             std::memset(&ctx, 0, sizeof(ctx));
+            std::memset(&rc, 0, sizeof(rc));
         }
     // single-threaded usage; no mutex to support older toolchains
     };
@@ -251,14 +255,14 @@ bool SnxCodecController::Impl::configureSession(Session &session,
     session.ctx.ds_font_num = 128; // align with SDK default
     session.ctx.flags = 0;
 
-    LOG(NOTICE) << "SNX cfg m2m=" << (isM2M?1:0)
-                << " scale=" << session.ctx.scale
-                << " " << (unsigned)session.ctx.width << "x" << (unsigned)session.ctx.height
-                << " isp_fps=" << session.ctx.isp_fps
-                << " codec_fps=" << session.ctx.codec_fps
-                << " gop=" << session.ctx.gop
-                << " buf=" << session.ctx.m2m_buffers
-                << " mem{c,o,i}=" << session.ctx.cap_mem << "," << session.ctx.out_mem << "," << session.ctx.isp_mem;
+    LOG(INFO) << "SNX cfg m2m=" << (isM2M?1:0)
+              << " scale=" << session.ctx.scale
+              << " " << (unsigned)session.ctx.width << "x" << (unsigned)session.ctx.height
+              << " isp_fps=" << session.ctx.isp_fps
+              << " codec_fps=" << session.ctx.codec_fps
+              << " gop=" << session.ctx.gop
+              << " buf=" << session.ctx.m2m_buffers
+              << " mem{c,o,i}=" << session.ctx.cap_mem << "," << session.ctx.out_mem << "," << session.ctx.isp_mem;
 
     if (isM2M)
     {
@@ -407,6 +411,33 @@ bool SnxCodecController::Impl::configureSession(Session &session,
 codec_init_ok:
     session.codecInitialized = true;
 
+    // Initialize Rate Control for H.264 CBR
+    if (session.ctx.codec_fmt == V4L2_PIX_FMT_H264 && session.ctx.bit_rate > 0)
+    {
+        // Initialize RC struct for CBR (per SDK documentation)
+        session.rc.width = session.ctx.width / session.ctx.scale;
+        session.rc.height = session.ctx.height / session.ctx.scale;
+        session.rc.codec_fd = session.ctx.codec_fd;
+        session.rc.Targetbitrate = session.ctx.bit_rate;
+        session.rc.framerate = session.ctx.codec_fps;  // CRITICAL: Use codec_fps, not isp_fps
+        session.rc.gop = session.ctx.gop;              // Use GOP setting from ctx
+
+        // Seed initial QP from rate control (required for CBR loop)
+        // NOTE: snx_codec_rc_init() loads defaults and OVERWRITES snx_rc_ext values
+        LOG(INFO) << "RC: targetBitrate=" << session.rc.Targetbitrate 
+                  << " fps=" << session.rc.framerate << " gop=" << session.rc.gop;
+        session.ctx.qp = snx_codec_rc_init(&session.rc, SNX_RC_INIT);
+        LOG(INFO) << "RC initialized with QP=" << session.ctx.qp;
+
+        // Disable motion detection features AFTER rc_init (which loads defaults)
+        // These features dynamically adjust FPS/bitrate, causing stuttering
+        session.rc.snx_rc_ext.mdrc_en = 0;        // Disable motion detection rate control
+        session.rc.snx_rc_ext.md_cnt_en = 0;      // Disable motion detection low bitrate mode
+        session.rc.snx_rc_ext.rc_update = 0;      // Prevent dynamic RC parameter updates
+        snx_rc_ext_set(&session.rc.snx_rc_ext);
+        LOG(DEBUG) << "Motion detection disabled (mdrc=0, md_cnt=0)";
+    }
+
     if (isM2M)
     {
         LOG(INFO) << "snx_isp_start()";
@@ -417,6 +448,20 @@ codec_init_ok:
             return false;
         }
         session.ispStarted = true;
+        
+        // Configure ISP power line frequency after ISP start (settings persist until ISP stop)
+        if (deviceConfig.powerLineFreq > 0)
+        {
+            if (snx_isp_light_frequency_set(deviceConfig.powerLineFreq) == 0)
+            {
+                LOG(INFO) << "ISP anti-flicker set to " << deviceConfig.powerLineFreq << "Hz";
+            }
+            else
+            {
+                LOG(WARN) << "Failed to set ISP power line frequency to " << deviceConfig.powerLineFreq << "Hz";
+            }
+        }
+        
         // Small settle delay to avoid immediate REQBUFS conflicts
         usleep(50000);
     }
@@ -689,6 +734,13 @@ bool SnxCodecController::readFrame(StreamKind stream, std::vector<unsigned char>
     buffer.assign(raw, raw + payload);
     presentation = session.ctx.timestamp;
     isKeyFrame = (session.ctx.flags & V4L2_BUF_FLAG_KEYFRAME) != 0;
+
+    // Per-frame bitrate feedback for CBR (H.264 only)
+    if (session.ctx.cap_bytesused > 0 && session.ctx.codec_fmt == V4L2_PIX_FMT_H264 && session.ctx.bit_rate > 0)
+    {
+        // Update QP based on actual frame size to maintain target bitrate
+        session.ctx.qp = snx_codec_rc_update(&session.ctx, &session.rc);
+    }
 
     if (snx_codec_reset(&session.ctx) != 0)
     {
