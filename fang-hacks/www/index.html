@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ISP Controls</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{
+  --padY:14px; --padX:28px; --gap:12px; --radius:14px;
+  --bg:#f6f7f9; --card:#fff; --ink:#222; --muted:#666;
+  --acc:#0b6cfb; --bad:#d33; --warn:#ff9800; --ok:#12a150;
+  --glow-ok:rgba(18,161,80,.12); --glow-warn:rgba(255,152,0,.12); --glow-err:rgba(211,51,51,.12);
+}
+*{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial,sans-serif}
+body{margin:0;background:var(--bg);color:var(--ink)}
+header{position:sticky;top:0;background:#fff;border-bottom:1px solid #eee;padding:8px var(--padX);display:flex;gap:10px;align-items:center;z-index:2;flex-wrap:wrap}
+h1{font-size:16px;margin:0;margin-right:auto}
+.btn{appearance:none;border:1px solid #ddd;background:#fff;border-radius:10px;padding:8px 12px;cursor:pointer}
+.btn.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+.toggle{display:flex;align-items:center;gap:8px;margin-left:8px;font-size:13px;color:#333}
+main{padding:var(--padY) var(--padX);display:grid;grid-template-columns:repeat(2,minmax(360px,1fr));gap:var(--gap)}
+@media (max-width:980px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid #eee;border-radius:var(--radius);padding:var(--padY);box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card h2{margin:0;font-size:15px}
+.cardhead{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-bottom:8px}
+.cardhead .switch{display:flex;align-items:center;gap:6px;font-size:13px;color:#333}
+
+.control{display:flex;flex-direction:column;gap:8px;margin:14px 0}
+.label{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.note{font-size:12px;color:#4a5568;padding:2px 8px;border-radius:999px;background:#eef3ff}
+.rowline{display:grid;grid-template-columns: 1fr 84px 180px;gap:10px;align-items:center}
+.rowline input[type="range"]{width:100%}
+.value{width:84px;padding:6px 8px;border:1px solid #ccc;border-radius:8px;transition:border-color .15s,background .15s}
+.value.invalid{border-color:var(--bad);background:#fee}
+.actions{display:flex;justify-content:flex-end;gap:10px}
+.actions .btn{min-width:70px}
+
+.row.flash-ok   .control{background:var(--glow-ok);  border-radius:12px; transition:background .35s}
+.row.flash-warn .control{background:var(--glow-warn);border-radius:12px; transition:background .35s}
+.row.flash-err  .control{background:var(--glow-err); border-radius:12px; transition:background .35s}
+
+.spinner{display:flex;justify-content:center;align-items:center;height:120px}
+.spin{width:28px;height:28px;border:3px solid #ddd;border-top-color:var(--acc);border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+#toast{position:fixed;right:16px;bottom:16px;background:#000;color:#fff;padding:10px 14px;border-radius:10px;opacity:0;transform:translateY(10px);transition:.25s}
+#toast.show{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+<header>
+  <h1>ISP Controls</h1>
+  <label class="toggle"><input type="checkbox" id="autoApply"> Apply immediately</label>
+  <button class="btn" id="reloadBtn">Sync</button>
+  <button class="btn primary" id="applyAllBtn">Apply all</button>
+  <button class="btn" id="saveBtn">Save</button>
+  <button class="btn" id="loadBtn">Load</button>
+</header>
+
+<main id="cards"><div class="spinner"><div class="spin"></div></div></main>
+<div id="toast"></div>
+
+<script>
+const GET_URL  = "/cgi-bin/isp.cgi?op=get";
+const SET_URL  = "/cgi-bin/isp.cgi";
+const SAVE_URL = "/cgi-bin/isp.cgi?op=save";
+const LOAD_URL = "/cgi-bin/isp.cgi?op=load";
+
+/* Card header enables */
+const CARD_ENABLE = {
+  "Auto Exposure (AE)"         : "ae/enable",
+  "Auto White Balance (AWB)"   : "awb/enable",
+  "Dynamic Range Control (DRC)": "drc/enable",
+  "3D Noise Reduction (NR3D)"  : "nr3d/enable"
+};
+
+/* Groups (no per-row enable fields) */
+const GROUPS = {
+  "Image": [
+    ["filter/brightness", "Brightness"],
+    ["filter/contrast",   "Contrast"],
+    ["filter/saturation", "Saturation"],
+    ["filter/sharpness",  "Sharpness"],
+    ["filter/hue",        "Hue"],
+    ["filter/gamma",      "Gamma"]
+  ],
+  "Auto Exposure (AE)": [
+    ["ae/exp_time",         "Exposure Time", "microseconds"],
+    ["ae/gain",             "Gain"],
+    ["ae/fps",              "FPS"],
+    ["ae/min_fps",          "Minimum FPS"],
+    ["ae/outdoor_mode",     "Outdoor Mode", "1 = outdoor, 0 = indoor"],
+    ["ae/light-freqency-hz","Light Frequency", "Hz"]
+  ],
+  "Auto White Balance (AWB)": [
+    ["awb/temperature", "Color Temperature", "K"]
+  ],
+  "Dynamic Range Control (DRC)": [
+    ["drc/intensity", "Intensity"]
+  ],
+  "3D Noise Reduction (NR3D)": [
+    ["nr3d/intensity", "Intensity"]
+  ],
+  "Mirror / Flip": [
+    ["mirror-flip/mode", "Mode", "0 none, 1 mirror, 2 flip, 3 both"]
+  ],
+  "Advanced Sensor": [
+    ["sensor/fps",      "Sensor FPS"],
+    ["sensor/gain",     "Sensor Gain"],
+    ["sensor/exposure", "Sensor Exposure", "microseconds"],
+    ["sensor/light-hz", "Sensor Light Hz", "Hz"]
+  ]
+};
+
+/* Ranges (DECIMAL) – updated */
+const RANGES = {
+  "filter/brightness":[0,127,1],
+  "filter/contrast":[0,64,1],
+  "filter/saturation":[0,255,1],
+  "filter/sharpness":[0,6,1],
+  "filter/hue":[0,255,1],
+  "filter/gamma":[76,500,1],
+
+  "ae/exp_time":[1,1000000,1],
+  "ae/gain":[0,4095,1],
+  "ae/fps":[1,30,1],
+  "ae/min_fps":[1,30,1],
+  "ae/outdoor_mode":[0,1,1],
+  "ae/light-freqency-hz":[50,60,10],
+
+  "awb/temperature":[2000,9000,100],
+
+  "drc/intensity":[0,16,1],
+
+  "nr3d/intensity":[0,255,1],
+
+  "mirror-flip/mode":[0,3,1],
+
+  "sensor/fps":[1,30,1],
+  "sensor/gain":[1024,2560,1],
+  "sensor/exposure":[1,1000000,1],
+  "sensor/light-hz":[50,60,10]
+};
+
+const initialValues = {}, currentValues = {}, dirty = new Set();
+const autoApplyEl = document.getElementById('autoApply');
+const cardsEl = document.getElementById('cards');
+const toast = (t, ok=true)=>{ const el=document.getElementById('toast'); el.textContent=t; el.style.background=ok?'rgba(0,0,0,.85)':'#b00020'; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),1600); };
+
+/* helpers */
+const dec = v => { v = String(v??'').trim(); if (!v) return ''; if(/^0x[0-9a-f]+$/i.test(v)) return String(parseInt(v,16)); const n=parseInt(v,10); return isNaN(n)?'':String(n); };
+const nOrEmpty = v => (v===''||isNaN(Number(v))?'':String(Number(v)));
+const rowEl = key => document.querySelector(`.row[data-key="${CSS.escape(key)}"]`);
+function flash(key, kind){ const r=rowEl(key); if(!r)return; r.classList.remove('flash-ok','flash-warn','flash-err'); r.offsetHeight; r.classList.add(kind); setTimeout(()=>r.classList.remove(kind), 900); }
+
+function markValidity(key){
+  const [min,max] = RANGES[key]||[Number.NEGATIVE_INFINITY,Number.POSITIVE_INFINITY];
+  const txt=document.querySelector(`input.value[data-key="${key}"]`); if(!txt)return;
+  if (txt.value===''){ txt.classList.remove('invalid'); return; }
+  const n=Number(txt.value.trim()); const warn=!(isFinite(n) && n>=min && n<=max);
+  txt.classList.toggle('invalid', warn);
+  if((initialValues[key]??'')!==txt.value) dirty.add(key); else dirty.delete(key);
+}
+
+function paintOne(key, val){
+  val = dec(val);
+  currentValues[key]=val;
+  const txt=document.querySelector(`input.value[data-key="${key}"]`); if(txt) txt.value=val;
+  const sl=document.querySelector(`input[type="range"][data-key="${key}"]`); if(sl && val!=='') sl.value=Number(val);
+  markValidity(key);
+}
+
+/* Build UI */
+function enableHTML(title){
+  const enableKey = CARD_ENABLE[title]; if(!enableKey) return '<span></span>';
+  return `<div class="switch"><label><input type="checkbox" class="card-enable" data-key="${enableKey}"> Enable</label></div>`;
+}
+function buildCard(title, items){
+  const card=document.createElement('section'); card.className='card';
+  card.innerHTML=`<div class="cardhead"><div><h2>${title}</h2></div>${enableHTML(title)}</div><div class="rows"></div>`;
+  const rows=card.querySelector('.rows');
+
+  const isAdvanced = (title === "Advanced Sensor");
+  const host = isAdvanced ? (()=>{const d=document.createElement('details'); d.innerHTML='<summary>Show advanced</summary>'; const inner=document.createElement('div'); d.appendChild(inner); rows.appendChild(d); return inner;})() : rows;
+
+  items.forEach(([key, label, note])=>{
+    const [min,max,step]=RANGES[key]||[0,100,1];
+    const row=document.createElement('div'); row.className='row'; row.dataset.key=key;
+    row.innerHTML=`
+      <div class="control">
+        <div class="label">${label}${note?` <span class="note">${note}</span>`:''}</div>
+        <div class="rowline">
+          <input type="range" data-key="${key}" min="${min}" max="${max}" step="${step}" value="${min}">
+          <input type="text" class="value" data-key="${key}" inputmode="numeric" pattern="[0-9]*" value="">
+          <div class="actions">
+            <button class="btn" data-read="${key}">Read</button>
+            <button class="btn primary" data-apply="${key}">Apply</button>
+          </div>
+        </div>
+      </div>`;
+    host.appendChild(row);
+  });
+  return card;
+}
+
+function buildSkeleton(){
+  cardsEl.innerHTML='';
+  Object.keys(GROUPS).forEach(title=>{
+    const c=document.createElement('section'); c.className='card';
+    c.innerHTML=`<div class="cardhead"><div><h2>${title}</h2></div>${enableHTML(title)}</div><div class="spinner"><div class="spin"></div></div>`;
+    cardsEl.appendChild(c);
+  });
+}
+function replaceCard(title, contents){
+  const card=[...document.querySelectorAll('.card')].find(c=>c.querySelector('h2')?.textContent===title);
+  if (card) card.replaceWith(contents); else cardsEl.appendChild(contents);
+}
+
+/* Fetch helpers */
+async function fetchGet(keysCsv){
+  const url = keysCsv ? `${GET_URL}&keys=${encodeURIComponent(keysCsv)}` : GET_URL;
+  return fetch(url,{cache:'no-store'}).then(r=>r.json());
+}
+async function setPairs(obj){
+  const pairs=Object.entries(obj).map(([k,v])=>`${k}:${nOrEmpty(v)}`).join(',');
+  const body=`op=set&pairs=${encodeURIComponent(pairs)}`;
+  return fetch("/cgi-bin/isp.cgi",{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}).then(r=>r.json());
+}
+
+/* Load groups in parallel */
+async function loadGroup(title, items){
+  const keys = items.map(x=>x[0]);
+  const ek = CARD_ENABLE[title]; if (ek) keys.push(ek);
+  const j = await fetchGet(keys.join(','));
+  if (!j.ok) throw 0;
+  const card = buildCard(title, items);
+  replaceCard(title, card);
+  items.forEach(([k])=>{
+    const v = dec(j.data && j.data[k]!=null ? j.data[k] : '');
+    initialValues[k]=v; currentValues[k]=v; paintOne(k,v);
+  });
+  if (ek){
+    const v = dec(j.data && j.data[ek]!=null ? j.data[ek] : '');
+    initialValues[ek]=v; currentValues[ek]=v;
+    const cb = card.querySelector(`.card-enable[data-key="${ek}"]`); if (cb) cb.checked=(String(v)==='1');
+  }
+}
+
+async function init(){
+  buildSkeleton();
+  try{
+    const tasks=[]; for (const [title, items] of Object.entries(GROUPS)) tasks.push(loadGroup(title, items));
+    await Promise.allSettled(tasks);
+    toast('Loaded');
+  }catch(e){
+    // fallback single GET
+    cardsEl.innerHTML='';
+    const frag=document.createDocumentFragment();
+    for (const [title, items] of Object.entries(GROUPS)) frag.appendChild(buildCard(title, items));
+    cardsEl.appendChild(frag);
+    const j=await fetchGet().catch(()=>({ok:false}));
+    if (j.ok){
+      [...Object.values(GROUPS).flat().map(x=>x[0]), ...Object.values(CARD_ENABLE)].forEach(k=>{
+        if (!k) return; const v=dec(j.data&&j.data[k]!=null?j.data[k]:''); initialValues[k]=v; currentValues[k]=v; paintOne(k,v);
+        const cb=document.querySelector(`.card-enable[data-key="${k}"]`); if (cb) cb.checked=(String(v)==='1');
+      });
+      toast('Loaded');
+    } else toast('Load failed', false);
+  }
+}
+
+/* Results & actions */
+function handleResult(k, desired, res){
+  const actual = dec((res && typeof res.val !== 'undefined') ? res.val : desired);
+  const ok = !!(res && res.ok);
+  paintOne(k, actual);
+  if (!ok) { flash(k,'flash-err'); toast(`Write ${k} failed`, false); }
+  else if (actual !== String(desired)) { flash(k,'flash-warn'); toast(`Adjusted ${k} ? ${actual}`, true); }
+  else { flash(k,'flash-ok'); toast(`Applied ${k}`, true); }
+  if (ok) initialValues[k]=actual;
+}
+
+async function applyOne(key){
+  const desired = nOrEmpty(currentValues[key] ?? '');
+  const j = await setPairs({[key]:desired}).catch(()=>({ok:false}));
+  if (!(j && j.ok && j.results && j.results[key])) { flash(key,'flash-err'); toast(`Apply ${key} failed`, false); return; }
+  handleResult(key, desired, j.results[key]);
+}
+
+async function applyAll(){
+  if(!dirty.size){ toast('No changes'); return; }
+  const obj={}; for(const k of dirty) obj[k]=nOrEmpty(currentValues[k]);
+  const j=await setPairs(obj).catch(()=>({ok:false}));
+  if (!(j && j.ok && j.results)) { Object.keys(obj).forEach(k=>flash(k,'flash-err')); toast('Apply failed', false); return; }
+  for(const [k,desired] of Object.entries(obj)){ if (j.results[k]) handleResult(k, desired, j.results[k]); }
+  dirty.clear();
+  Object.keys(RANGES).concat(Object.values(CARD_ENABLE)).forEach(k=>{
+    if(!k) return; if ((initialValues[k]??'') !== (currentValues[k]??'')) dirty.add(k);
+  });
+}
+
+/* Save/Load */
+async function saveAll(){ if(dirty.size) await applyAll(); const j=await fetch(SAVE_URL,{method:'POST'}).then(r=>r.json()).catch(()=>({ok:false})); toast(j.ok?`Saved (${j.count})`:'Save failed', !!j.ok); }
+async function loadAll(){
+  const j=await fetch(LOAD_URL,{cache:'no-store'}).then(r=>r.json()).catch(()=>({ok:false}));
+  if (j && j.ok && j.results){
+    Object.entries(j.results).forEach(([k,res])=>{
+      const val = dec((typeof res.val !== 'undefined') ? res.val : '');
+      paintOne(k,val);
+      if (!res.ok) flash(k,'flash-err'); else flash(k,'flash-ok');
+      initialValues[k]=val;
+      const cb=document.querySelector(`.card-enable[data-key="${k}"]`); if (cb) cb.checked=(String(val)==='1');
+    });
+    toast('Loaded & applied (synced)');
+  } else toast('Load failed', false);
+}
+
+/* Events */
+document.addEventListener('input', (ev)=>{
+  const el=ev.target;
+  if(el.matches('input[type="range"][data-key]')){
+    const k=el.dataset.key; const t=document.querySelector(`input.value[data-key="${k}"]`);
+    t.value = String(Number(el.value)); currentValues[k]=t.value; markValidity(k);
+  }
+  if(el.matches('input.value[data-key]')){
+    const k=el.dataset.key;
+    const v=dec(el.value); el.value=v; currentValues[k]=v; markValidity(k);
+    const sl=document.querySelector(`input[type="range"][data-key="${k}"]`); if(sl && v!=='') sl.value=Number(v);
+  }
+});
+/* Apply immediately = slider release only (textboxes never auto-apply) */
+document.addEventListener('change', (ev)=>{
+  const el=ev.target;
+  if(el.matches('input[type="range"][data-key]') && autoApplyEl.checked){ applyOne(el.dataset.key); }
+  if(el.matches('.card-enable[data-key]')){ const k=el.dataset.key; currentValues[k]=el.checked?'1':'0'; dirty.add(k); applyOne(k); }
+});
+/* Enter-to-apply for textboxes */
+document.addEventListener('keydown', (ev)=>{
+  if(ev.key === 'Enter'){
+    const el=ev.target;
+    if(el.matches('input.value[data-key]')){ ev.preventDefault(); applyOne(el.dataset.key); }
+  }
+});
+document.addEventListener('click', (ev)=>{
+  const b=ev.target.closest('button'); if(!b) return;
+  if(b.dataset.read){ const k=b.dataset.read; fetch(`${GET_URL}&keys=${encodeURIComponent(k)}`,{cache:'no-store'}).then(r=>r.json()).then(j=>{ if(j&&j.ok){ const v=dec(j.data[k]??''); initialValues[k]=v; currentValues[k]=v; paintOne(k,v); toast(`Read ${k}`);} else toast(`Read ${k} failed`,false); }); return; }
+  if(b.dataset.apply){ applyOne(b.dataset.apply); return; }
+  if(b.id==='reloadBtn'){ init(); return; }
+  if(b.id==='applyAllBtn'){ applyAll(); return; }
+  if(b.id==='saveBtn'){ saveAll(); return; }
+  if(b.id==='loadBtn'){ loadAll(); return; }
+});
+
+/* start */
+init();
+</script>
+</body>
+</html>
